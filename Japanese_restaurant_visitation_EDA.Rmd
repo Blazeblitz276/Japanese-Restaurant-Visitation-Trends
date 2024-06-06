@@ -1,0 +1,820 @@
+---
+title: "Team_Restaurant_EDA_Final_Project"
+author: "Balajee Devesha Srinivasan (basrini@iu.edu)"
+date: "2023-11-29"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+library(grid)
+library(ggplot2)
+library(lubridate)
+library(ggridges)
+library(grid)
+
+library(DT)
+library(grid)
+library(gridExtra)
+library(tseries)
+library(forecast)
+library(tidyverse)
+library(readr)
+
+theme_set(theme_bw())
+```
+
+
+We use the *multiplot* function, courtesy of [R Cookbooks](http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_(ggplot2)/) to create multi-panel plots.
+
+```{r }
+DataPath <- "D:/CollegeWork/EDA/SemProject/ProjectData/RestVisitorData/"
+
+Visits <- read_csv(str_c(DataPath,'air_visit_data.csv.zip'), col_types = cols())
+Reservations_AIR <- read_csv(str_c(DataPath,'air_reserve.csv.zip'), col_types = cols())
+Reservations_HPG <- read_csv(str_c(DataPath,'hpg_reserve.csv.zip'), col_types = cols())
+StoreInfo_AIR <- read_csv(str_c(DataPath,'air_store_info.csv.zip'), col_types = cols())
+StoreInfo_HPG <- read_csv(str_c(DataPath,'hpg_store_info.csv.zip'), col_types = cols())
+holiday_data <- read_csv(str_c(DataPath,'date_info.csv.zip'), col_types = cols())
+store_ids <- read_csv(str_c(DataPath,'store_id_relation.csv.zip'), col_types = cols())
+test_data <-read_csv(str_c(DataPath,'sample_submission.csv.zip'), col_types = cols())
+
+
+Visits = Visits[ visit_date = as.Date(visit_date), ]
+holidays = dplyr::filter(holiday_data, holiday_flg == 1)
+
+```
+
+
+
+```{r}
+
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+# Target Variable (Visits)
+
+```{r}
+summary(Visits)
+```
+```{r}
+Visits %>% distinct(air_store_id) %>% nrow()
+
+Reservations_AIR %>% distinct(air_store_id) %>% nrow()
+
+Reservations_HPG %>% distinct(hpg_store_id) %>% nrow()
+```
+
+```{r}
+sum(is.na(Visits))
+sum(is.na(Reservations_AIR))
+sum(is.na(Reservations_HPG))
+sum(is.na(StoreInfo_AIR))
+sum(is.na(StoreInfo_HPG))
+sum(is.na(store_ids))
+sum(is.na(test_data))
+```
+
+```{r}
+Visits <- Visits %>%
+  mutate(visit_date = ymd(visit_date))
+
+Reservations_AIR <- Reservations_AIR %>%
+  mutate(visit_datetime = ymd_hms(visit_datetime),
+         reserve_datetime = ymd_hms(reserve_datetime))
+
+Reservations_HPG <- Reservations_HPG %>%
+  mutate(visit_datetime = ymd_hms(visit_datetime),
+         reserve_datetime = ymd_hms(reserve_datetime))
+
+StoreInfo_AIR <- StoreInfo_AIR %>%
+  mutate(air_genre_name = as.factor(air_genre_name),
+         air_area_name = as.factor(air_area_name))
+
+StoreInfo_HPG <- StoreInfo_HPG %>%
+  mutate(hpg_genre_name = as.factor(hpg_genre_name),
+         hpg_area_name = as.factor(hpg_area_name))
+
+holidays <- holidays %>%
+  mutate(holiday_flg = as.logical(holiday_flg),
+         date = ymd(calendar_date),
+         calendar_date = as.character(calendar_date))
+```
+
+
+
+
+
+
+
+
+```{r fig.height=6,fig.width=8}
+p1 <- Visits %>%
+  group_by(visit_date) %>%
+  summarise(all_visitors = sum(visitors), .groups = 'drop') %>%
+  ggplot(aes(visit_date, all_visitors)) +
+  geom_line(col = "steelblue", size = 0.7
+            ) +
+  geom_vline(data = holidays, aes(xintercept = as.Date(calendar_date)), alpha = 0.4) + 
+    scale_x_date(date_breaks = "1 month") + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  geom_smooth(method = "loess", col = "orangered",  span =1/7, linewidth = 0.5) +
+  labs(x ="",
+       y = "Visitors",
+       title = "Visitors by day")
+
+p2 <- Visits %>%
+  ggplot(aes(visitors)) +
+  geom_vline(xintercept = 20, color = "orange") +
+  geom_histogram(fill = "steelblue", bins = 30, alpha = 0.8) +
+  scale_x_log10()
+
+p3 <- Visits %>%
+  mutate(wday = wday(visit_date, label = TRUE, week_start = 1)) %>%
+  group_by(wday) %>%
+  summarise(visits = median(visitors)) %>%
+  ggplot(aes(wday, visits, fill = wday)) +
+  geom_col() +
+  theme(legend.position = "none", axis.text.x  = element_text(angle=45, hjust=1, vjust=0.9)) +
+  labs(x = "Day of the week", y = "Median visitors") +
+  scale_color_viridis_d()
+  
+p4 <- Visits %>%
+  mutate(month = month(visit_date, label = TRUE)) %>%
+  group_by(month) %>%
+  summarise(visits = median(visitors)) %>%
+  ggplot(aes(month, visits, fill = month)) +
+  geom_col() +scale_color_viridis_d()+
+  theme(legend.position = "none") +
+  labs(x = "Month", y = "Median visitors")
+
+layout <- matrix(c(1,1,1,1,2,3,4,4),2,4,byrow=TRUE)
+multiplot(p1, p2, p3, p4, layout=layout)
+
+```
+```{r}
+Visits$visit_date <- ymd(Visits$visit_date)
+Reservations_AIR$reserve_datetime <- ymd_hms(Reservations_AIR$reserve_datetime)
+Reservations_AIR$visit_datetime <- ymd_hms(Reservations_AIR$visit_datetime)
+
+Reservations_HPG$reserve_datetime <- ymd_hms(Reservations_HPG$reserve_datetime)
+Reservations_HPG$visit_datetime <- ymd_hms(Reservations_HPG$visit_datetime)
+
+
+names(Reservations_AIR) <- c("air_store_id","visit_date","reserve_date","visitors")
+names(Reservations_HPG) <- c("air_store_id","visit_date","reserve_date","visitors")
+
+
+visitors_air <- Visits %>% mutate (type = "AIR_visitors") %>% 
+    select (type, visit_date, visitors) %>% group_by(type, visit_date) %>% 
+    summarize(total_visitors = sum(visitors))
+
+# For Visitors based on AIR Reservation
+visitors_ar <- Reservations_AIR %>% mutate(type = "AIR_reservation") %>% 
+    group_by(type, visit_date = date(visit_date)) %>% 
+    summarize(total_visitors = sum(visitors))
+
+# For visitors based on HPG reservation
+visitors_hpg <- Reservations_HPG %>% mutate(type = "HPG_reservation") %>% 
+    group_by(type, visit_date = date(visit_date)) %>% 
+    summarize(total_visitors = sum(visitors))
+```
+
+
+```{r}
+
+
+
+g1 <- ggplot(data = visitors_air, aes(x = visit_date, y = total_visitors)) +
+    geom_line(col = "darkgreen") + 
+    labs(x = "Date", y = "# Visitors", title = "No. of Visitors Combined") +
+    geom_smooth(method = "loess", col = "orangered",  span =1/7, linewidth = 0.5, se = FALSE)+
+    theme_bw()
+
+g2 <- ggplot(data = visitors_ar, aes(x = visit_date, y = total_visitors)) +
+    geom_line(col = "steelblue") +
+    labs(x = "Date", y = "# Visitors", title = "Actual No. of Reserved Visitors - AIR restaurants") +
+    geom_smooth(method = "loess", col = "orangered",  span =1/7, linewidth = 0.5, se = FALSE)+
+    theme_bw()
+
+g3 <- ggplot(data = visitors_hpg, aes(x = visit_date, y = total_visitors)) +
+    geom_line(col = "orange" ) +
+    labs(x = "Date", y = "# Visitors", title = "Actual No. of Reserved Visitors - HPG restaurants") +
+  geom_smooth(method = "loess", col = "orangered",  span =1/7, linewidth = 0.5, se = FALSE)+
+    theme_bw()
+
+layout <- matrix(c(1,2,3),3,1,byrow=TRUE)
+multiplot(g1, g2, g3, layout=layout)
+
+```
+
+```{r}
+visits_air_joined <- Visits %>%
+    left_join(air_store, by = "air_store_id")
+
+# Joining the visits data with the store_id_relation to get hpg_store_id, and then with hpg_store
+visits_hpg_joined <- Visits %>%
+    left_join(store_ids, by = "air_store_id") %>%
+    left_join(hpg_store, by = "hpg_store_id")
+
+# Combining the two joined datasets
+visits_joined <- bind_rows(visits_air_joined, visits_hpg_joined)
+
+# Extracting the prefecture from the area name
+visits_joined <- visits_joined %>%
+    mutate(pref = ifelse(!is.na(air_area_name), stringr::str_split(air_area_name, " ", simplify = TRUE)[, 1], 
+                         stringr::str_split(hpg_area_name, " ", simplify = TRUE)[, 1]))
+
+# Summarising total visitors by visit_date and pref, and then plotting
+visits_joined %>%
+    group_by(visit_date, pref) %>%
+    summarise(total_visitors = sum(visitors, na.rm = TRUE)) %>%
+    ggplot(aes(x = visit_date, y = total_visitors, color = pref)) + 
+    geom_line() + 
+    geom_smooth(method = 'loess',linewidth = 0.5, col = "black", span = 1/7, se = F) + 
+    facet_wrap(~pref, scales = 'free_y') + 
+    labs(x = '', title = 'Total daily visits by Prefecture') + 
+    theme(legend.position = "none")
+```
+
+```{r, fig.height=10}
+# Joining the visits data with air_store
+visits_air_joined <- Visits %>%
+    left_join(air_store, by = "air_store_id")
+
+# Joining the visits data with the store_id_relation to get hpg_store_id, and then with hpg_store
+visits_hpg_joined <- Visits %>%
+    left_join(store_ids, by = "air_store_id") %>%
+    left_join(hpg_store, by = "hpg_store_id")
+
+# Combining the two joined datasets
+visits_joined <- bind_rows(visits_air_joined, visits_hpg_joined)
+
+# Creating a single 'genre' column that combines cuisine type from both air_store and hpg_store
+visits_joined <- visits_joined %>%
+    mutate(genre = ifelse(!is.na(air_genre_name), air_genre_name, hpg_genre_name))
+
+# Summarising total visitors by visit_date and genre, and then plotting
+visits_joined %>%
+    group_by(visit_date, genre) %>%
+    summarise(total_visitors = sum(visitors, na.rm = TRUE)) %>%
+    ggplot(aes(x = visit_date, y = total_visitors, color = genre)) + 
+    geom_line() + 
+    geom_smooth(method = 'loess') + 
+    facet_wrap(~genre, scales = 'free_y', ncol = 2) +  # Adjust ncol as needed for better layout
+    labs(x = '', title = 'Total daily visits by Cuisine Type') + 
+    theme(legend.position = "none")
+```
+
+
+```{r split=FALSE, fig.align = 'default', warning = FALSE, fig.cap ="Fig. 3", out.width="100%"}
+foo <- Reservations_AIR %>%
+  mutate(reserve_date = date(reserve_datetime),
+         reserve_hour = hour(reserve_datetime),
+         reserve_wday = wday(reserve_datetime, label = TRUE, week_start = 1),
+         visit_date = date(visit_datetime),
+         visit_hour = hour(visit_datetime),
+         visit_wday = wday(visit_datetime, label = TRUE, week_start = 1),
+         diff_hour = time_length(visit_datetime - reserve_datetime, unit = "hour"),
+         diff_day = time_length(visit_datetime - reserve_datetime, unit = "day")
+         )
+
+p1 <- foo %>%
+  group_by(visit_date) %>%
+  summarise(all_visitors = sum(reserve_visitors)) %>%
+  ggplot(aes(visit_date, all_visitors)) +
+  geom_line() +
+  labs(x = "'air' visit date")
+
+p2 <- foo %>%
+  group_by(visit_hour) %>%
+  summarise(all_visitors = sum(reserve_visitors)) %>%
+  ggplot(aes(visit_hour, all_visitors)) +
+  geom_col(fill = "lightblue")+
+  scale_color_viridis_d()
+
+p3 <- foo %>%
+  filter(diff_hour < 24*5) %>%
+  group_by(diff_hour) %>%
+  summarise(all_visitors = sum(reserve_visitors)) %>%
+  ggplot(aes(diff_hour, all_visitors)) +
+  geom_col(fill = "lightblue") +
+  labs(x = "Time from reservation to visit [hours]")+
+  scale_color_viridis_d()
+
+layout <- matrix(c(1,1,2,3),2,2,byrow=TRUE)
+multiplot(p1, p2, p3, layout=layout)
+
+```
+
+
+```{r split=FALSE, fig.align = 'default', warning = FALSE, fig.cap ="Fig. 4", out.width="100%"}
+foo <- Reservations_HPG %>%
+  mutate(reserve_date = date(reserve_datetime),
+         reserve_hour = hour(reserve_datetime),
+         visit_date = date(visit_datetime),
+         visit_hour = hour(visit_datetime),
+         diff_hour = time_length(visit_datetime - reserve_datetime, unit = "hour"),
+         diff_day = time_length(visit_datetime - reserve_datetime, unit = "day")
+         )
+
+p1 <- foo %>%
+  group_by(visit_date) %>%
+  summarise(all_visitors = sum(reserve_visitors)) %>%
+  ggplot(aes(visit_date, all_visitors)) +
+  geom_line() +
+  labs(x = "'hpg' visit date")
+
+p2 <- foo %>%
+  group_by(visit_hour) %>%
+  summarise(all_visitors = sum(reserve_visitors)) %>%
+  ggplot(aes(visit_hour, all_visitors)) +
+  geom_col(fill = "pink")
+
+p3 <- foo %>%
+  filter(diff_hour < 24*5) %>%
+  group_by(diff_hour) %>%
+  summarise(all_visitors = sum(reserve_visitors)) %>%
+  ggplot(aes(diff_hour, all_visitors)) +
+  geom_col(fill = "pink") +
+  labs(x = "Time from reservation to visit [hours]")
+
+layout <- matrix(c(1,1,2,3),2,2,byrow=TRUE)
+multiplot(p1, p2, p3, layout=layout)
+
+```
+
+
+```{r split=FALSE, fig.align = 'default', warning = FALSE, fig.cap ="Fig. 6", out.width="100%",fig.height=10}
+p1 <- StoreInfo_AIR %>%
+  group_by(air_genre_name) %>%
+  count() %>%
+  ggplot(aes(reorder(air_genre_name, n, FUN = min), n, fill = air_genre_name)) +
+  geom_col() +
+  coord_flip() +
+  theme(legend.position = "none") +
+  labs(x = "Type of cuisine (air_genre_name)", y = "Number of air restaurants")+
+  scale_color_viridis_d()
+  
+p2 <- StoreInfo_AIR %>%
+  group_by(air_area_name) %>%
+  count() %>%
+  ungroup() %>%
+  top_n(15,n) %>%
+  ggplot(aes(reorder(air_area_name, n, FUN = min) ,n, fill = air_area_name)) +
+  geom_col() +
+  theme(legend.position = "none") +
+  coord_flip() +
+  labs(x = "Top 15 areas (air_area_name)", y = "Number of air restaurants")+
+  scale_color_viridis_d()
+
+layout <- matrix(c(1,2),2,1,byrow=TRUE)
+multiplot(p1, p2, layout=layout)
+```
+
+```{r split=FALSE, fig.align = 'default', warning = FALSE, fig.cap ="Fig. 8", out.width="100%",fig.height=10}
+p1 <- StoreInfo_HPG %>%
+  group_by(hpg_genre_name) %>%
+  count() %>%
+  ggplot(aes(reorder(hpg_genre_name, n, FUN = min), n, fill = hpg_genre_name)) +
+  geom_col() +
+  coord_flip() +
+  theme(legend.position = "none") +
+  labs(x = "Type of cuisine (hpg_genre_name)", y = "Number of hpg restaurants")+
+  scale_color_viridis_d()
+  
+p2 <- StoreInfo_HPG %>%
+  mutate(area = str_sub(hpg_area_name, 1, 20)) %>%
+  group_by(area) %>%
+  count() %>%
+  ungroup() %>%
+  top_n(15,n) %>%
+  ggplot(aes(reorder(area, n, FUN = min) ,n, fill = area)) +
+  geom_col() +
+  theme(legend.position = "none") +
+  coord_flip() +
+  labs(x = "Top 15 areas (hpg_area_name)", y = "Number of hpg restaurants")+
+  scale_color_viridis_d()
+
+layout <- matrix(c(1,2),1,2,byrow=TRUE)
+multiplot(p1, p2, layout=layout)
+
+```
+
+## Visitors per genre
+
+```{r split=FALSE, fig.align = 'default', warning = FALSE, fig.cap ="Fig. 11", out.width="100%"}
+foo <- Visits %>%
+  left_join(StoreInfo_AIR, by = "air_store_id")
+
+foo %>%
+  group_by(visit_date, air_genre_name) %>%
+  summarise(mean_visitors = mean(visitors)) %>%
+  ungroup() %>%
+  ggplot(aes(visit_date, mean_visitors, color = air_genre_name)) +
+  geom_line() +
+  labs(y = "Average number of visitors to 'air' restaurants", x = "Date") +
+  theme(legend.position = "none") +
+  scale_y_log10() +
+  facet_wrap(~ air_genre_name)+
+  scale_color_viridis_d()
+```
+```{r split=FALSE, fig.align = 'default', warning = FALSE, fig.cap ="Fig. 12", out.width="100%"}
+p1 <- foo %>%
+  mutate(wday = wday(visit_date, label = TRUE, week_start = 1)) %>%
+  group_by(wday, air_genre_name) %>%
+  summarise(mean_visitors = mean(visitors)) %>%
+  ggplot(aes(air_genre_name, mean_visitors, color = wday)) +
+  geom_point(size = 4) +
+  theme(legend.position = "left", axis.text.y = element_blank(),
+        plot.title = element_text(size = 14)) +
+  coord_flip() +
+  labs(x = "") +
+  scale_x_discrete(position = "top") +
+  ggtitle("air_genre_name") +
+  scale_color_hue()
+
+p2 <- foo %>%
+  ggplot(aes(visitors, air_genre_name, fill = air_genre_name)) +
+  geom_density_ridges(bandwidth = 0.1) +
+  scale_x_log10() +
+  theme(legend.position = "none") +
+  labs(y = "") +
+  scale_fill_cyclical(values = c("blue", "red"))
+
+layout <- matrix(c(1,1,2,2,2),1,5,byrow=TRUE)
+multiplot(p1, p2, layout=layout)
+p1 <- 1; p2 <- 1; p3 <- 1; p4 <- 1; p5 <- 1
+```
+
+
+
+## ARIMA / auto.arima
+
+```{r}
+Visits %>%
+  filter(visit_date > ymd("2016-04-01") & visit_date < ymd("2016-06-01")) %>%
+  group_by(visit_date) %>%
+  summarise(all_visitors = sum(visitors)) %>%
+  ggplot(aes(visit_date,all_visitors)) +
+  geom_line() +
+  geom_smooth(method = "loess", color = "steelblue", span = 1/7) +
+  labs(y = "All visitors", x = "Date")
+```
+```{r}
+Visits %>%
+  filter(visit_date > ymd("2016-06-01") & visit_date < ymd("2016-09-01")) %>%
+  group_by(visit_date) %>%
+  summarise(all_visitors = sum(visitors)) %>%
+  ggplot(aes(visit_date,all_visitors)) +
+  geom_line() +
+  geom_smooth(method = "loess", color = "steelblue", span = 1/7) +
+  labs(y = "All visitors", x = "Date")
+```
+```{r}
+Visits %>%
+  filter(visit_date > ymd('2016-09-01') & visit_date < ymd("2016-11-01")) %>%
+  group_by(visit_date) %>%
+  summarise(all_visitors = sum(visitors)) %>%
+  ggplot(aes(visit_date,all_visitors)) +
+  geom_line() +
+  geom_smooth(method = "loess", color = "steelblue", span = 1/7) +
+  labs(y = "All visitors", x = "Date")
+```
+
+```{r}
+Visits %>%
+  filter(visit_date > ymd("2016-11-01") & visit_date < ymd("2017-01-01")) %>%
+  group_by(visit_date) %>%
+  summarise(all_visitors = sum(visitors)) %>%
+  ggplot(aes(visit_date,all_visitors)) +
+  geom_line() +
+  geom_smooth(method = "loess", color = "steelblue", span = 1/7) +
+  labs(y = "All visitors", x = "Date")
+```
+
+```{r}
+Visits %>%
+  filter(visit_date > ymd("2017-01-01") & visit_date < ymd("2017-03-01")) %>%
+  group_by(visit_date) %>%
+  summarise(all_visitors = sum(visitors)) %>%
+  ggplot(aes(visit_date,all_visitors)) +
+  geom_line() +
+  geom_smooth(method = "loess", color = "steelblue", span = 1/7) +
+  labs(y = "All visitors", x = "Date")
+```
+```{r}
+Visits %>%
+  filter(visit_date > ymd("2017-03-01")) %>%
+  group_by(visit_date) %>%
+  summarise(all_visitors = sum(visitors)) %>%
+  ggplot(aes(visit_date,all_visitors)) +
+  geom_line() +
+  geom_smooth(method = "loess", color = "steelblue", span = 1/7) +
+  labs(y = "All visitors", x = "Date")
+```
+
+```{r}
+df_air <- fread('./ProjectData/RestVisitorData/air_visit_data.csv')
+df_air_store <- fread('./ProjectData/RestVisitorData/air_store_info.csv')
+```
+
+
+```{r}
+par(mfrow=c(2,1), cex=0.7)
+df_air %>% 
+  group_by(visit_date) %>% 
+  summarize(visitors = sum(visitors)) %>% 
+  plot(type='l', main='Overall Visitors')
+
+merged <- df_air %>% 
+  filter(visit_date > '2016-07-01') %>% 
+  left_join(df_air_store, by='air_store_id')
+
+merged_sum <- merged %>% 
+  group_by(visit_date) %>% 
+  summarize(visitors = sum(visitors)) 
+
+merged_sum %>% 
+  plot(type='l', xlab='Year', main='Cut-off at July 2016')
+```
+
+```{r}
+merged_train <- merged_sum %>% filter(visit_date <='2017-02-01')
+merged_test <- merged_sum %>% filter(visit_date >'2017-02-01')
+
+#print(paste(nrow(merged_sum),nrow(merged_train),nrow(merged_test)))
+
+m <- arima(merged_train$visitors, order=c(2,1,2), seasonal= list(order=c(1,1,1), period=7))
+y_pred <- forecast::forecast(m, h=80)
+
+par(mfrow=c(1,1), cex=0.7)
+plot(ts(merged_sum$visitors), main="ARIMA model predictions, cut off at Feb 2017")
+lines(y_pred$mean, col='red')
+```
+
+
+## Genre-wise
+
+```{r}
+genre_sum <- merged %>%
+  group_by(visit_date, air_genre_name) %>% 
+  summarize(visitors=sum(visitors))
+
+genre_unique <- merged %>% select(air_genre_name) %>% unique %>% unlist  
+genre_unique
+```
+
+```{r}
+graph_list <- list()
+
+plot_genre <- function(i){
+  genre_specific_sum <- genre_sum %>% filter(air_genre_name==i)
+  genre_train <- genre_specific_sum %>% filter(visit_date <='2017-02-01')
+  genre_test <- genre_specific_sum %>% filter(visit_date >'2017-02-01')
+  
+  m <- arima(genre_train$visitors, order=c(2,1,2), seasonal= list(order=c(1,1,1), period=7))
+  y_pred <- forecast::forecast(m, h=80)
+
+  plot(ts(genre_specific_sum$visitors), main=i, xlab='Year', ylab='visitors')
+  lines(y_pred$mean, col='red')
+}
+
+par(mfrow=c(3,1), cex=0.7)
+plot_genre(genre_unique[1])
+plot_genre(genre_unique[2])
+plot_genre(genre_unique[3])
+
+
+par(mfrow=c(3,1), cex=0.7)
+plot_genre(genre_unique[4])
+plot_genre(genre_unique[5])
+plot_genre(genre_unique[6])
+
+par(mfrow=c(3,1), cex=0.7)
+plot_genre(genre_unique[7])
+plot_genre(genre_unique[8])
+plot_genre(genre_unique[9])
+
+
+par(mfrow=c(3,1), cex=0.7)
+plot_genre(genre_unique[10])
+plot_genre(genre_unique[11])
+plot_genre(genre_unique[12])
+
+par(mfrow=c(2,1), cex=0.7)
+plot_genre(genre_unique[13])
+plot_genre(genre_unique[14])
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Excessive
+
+
+We use the first *air_store_id* ("air_ba937bf13d40fb24") as an example.
+
+```{r}
+air_id = "air_ba937bf13d40fb24"
+```
+
+In order to test our prediction, we will forecast for an identical time frame as we are ultimately tasked to predict (Apr 23th - May 31st). Here we automatically extract these 39 days from the length of the *test* prediction range and define it as our "prediction length".
+
+```{r}
+pred_len <- test_data %>%
+  separate(id, c("air", "store_id", "date"), sep = "_") %>%
+  distinct(date) %>%
+  nrow()
+```
+
+We choose to predict for the last 39 days of our *training* sample. This might not be Here we compute the upper end of our *training* dates and subtract our "prediction length" from this value to define the start of our validation sample on Mar 14th. We also create a data set of all *visit_dates* in preparation for many time series having gaps.
+
+```{r}
+max_date <- max(Visits$visit_date)
+split_date <- max_date - pred_len
+all_visits <- tibble(visit_date = seq(min(Visits$visit_date), max(Visits$visit_date), 1))
+```
+
+Next, we extract the time series for the specific *air_store_id*. We transform the *visitors* counts by `log1p` and join the data set of all *visit_dates*. This gives us a number of `NA` which we fill in with the overall median. The median might not be the best choice here, but it's a sensible starting point. Most time series prediction tools require a sequential time series without gaps; which is what we create in this step.
+
+```{r}
+foo <- Visits %>%
+  filter(air_store_id == air_id)
+
+visits <- foo %>%
+  right_join(all_visits, by = "visit_date") %>%
+  mutate(visitors = log1p(visitors)) %>%
+  replace_na(list(visitors = median(log1p(foo$visitors)))) %>%
+  rownames_to_column()
+```
+
+Using this new time series, we now split the data into *training* and *validation* sets.
+
+```{r}
+visits_train <- visits %>% filter(visit_date <= split_date)
+visits_valid <- visits %>% filter(visit_date > split_date)
+```
+
+Now comes the fitting part. As said before, we use the `ts` function to create a time series object and the `tsclean` tool to remove outliers. We also add the weekly frequency. The `stepwise` and `approximation` parameter settings mean that the tool performs a more thorough and precise search over all model parameters. This increases the computing time, but for our small data set this doesn't matter much.
+
+```{r}
+arima.fit <- auto.arima(tsclean(ts(visits_train$visitors, frequency = 7)),
+                        stepwise = FALSE, approximation = FALSE)
+```
+
+Using the fitted ARIMA model we will `forecast` for our "prediction length". We include confidence intervals.
+
+```{r}
+arima_visits <- arima.fit %>% forecast(h = pred_len, level = c(50,95))
+```
+
+Finally, we plot our prediction. The `autoplot` function of the `ggplot2` package creates plots according to the properties of a particular data type; here a time series object. The predicted *visitor* counts are shown in dark blue, with the lighter blues indicating the confidence ranges. We also add the real validation counts in grey:
+
+```{r split=FALSE, fig.align = 'default', warning = FALSE, fig.cap ="Fig. 31", out.width="100%"}
+arima_visits %>%
+  autoplot +
+  geom_line(aes(as.integer(rowname)/7, visitors), data = visits_valid, color = "grey40") +
+  labs(x = "Time [weeks]", y = "log1p visitors vs auto.arima predictions")
+```
+
+We find that the first days of the forecast fit quite well, but then our prediction is not able to capture the larger spikes. Still, it's a useful starting point to compare other methods to.
+
+Now we turn this procedure into a function, including the plotting part.
+
+```{r}
+plot_auto_arima_air_id <- function(air_id){
+
+  pred_len <- test_data %>%
+    separate(id, c("air", "store_id", "date"), sep = "_") %>%
+    distinct(date) %>%
+    nrow()
+
+  max_date <- max(Visits$visit_date)
+  split_date <- max_date - pred_len
+  all_visits <- tibble(visit_date = seq(min(Visits$visit_date), max(Visits$visit_date), 1))
+  
+  foo <- Visits %>%
+    filter(air_store_id == air_id)
+
+  visits <- foo %>%
+    right_join(all_visits, by = "visit_date") %>%
+    mutate(visitors = log1p(visitors)) %>%
+    replace_na(list(visitors = median(log1p(foo$visitors)))) %>%
+    rownames_to_column()
+  
+  visits_train <- visits %>% filter(visit_date <= split_date)
+  visits_valid <- visits %>% filter(visit_date > split_date)
+
+  arima.fit <- auto.arima(tsclean(ts(visits_train$visitors, frequency = 7)),
+                          stepwise = FALSE, approximation = FALSE)
+
+  arima_visits <- arima.fit %>% forecast(h = pred_len, level = c(50,95))
+
+  arima_visits %>%
+    autoplot +
+    geom_line(aes(as.integer(rowname)/7, visitors), data = visits_valid, color = "grey40") +
+    labs(x = "Time [weeks]", y = "log1p visitors vs forecast")
+}
+```
+
+And we apply this function to a few time series', including two of the *slope* outliers from the previous section:
+
+```{r fig.align = 'default', warning = FALSE, fig.cap ="Fig. 31", out.width="100%"}
+p1 <- plot_auto_arima_air_id("air_f3f9824b7d70c3cf")
+p2 <- plot_auto_arima_air_id("air_8e4360a64dbd4c50")
+p3 <- plot_auto_arima_air_id("air_1c0b150f9e696a5f")
+p4 <- plot_auto_arima_air_id("air_900d755ebd2f7bbd")
+
+layout <- matrix(c(1,2,3,4),2,2,byrow=TRUE)
+multiplot(p1, p2, p3, p4, layout=layout)
+```
+
+We find:
+
+-   The two time series' in the upper panels are reasonable complete, but we see that the long gaps (and our median filling) lead to problems in the predictions in the upper left panel where we loose the weekly periodicity. The upper right panel retains this periodicity and the predictions for the first days are relatively decent, but then we quickly under-predict the amplitude of the variations.
+
+-   The lower panels include two of the outliers from our time-series parameter space above; and here we see cases where things go really wrong. These kind of peculiar time series could lead to a bad performance for any otherwise decent forecasting algorithm if they contain a large enough fraction of visits in the test data set.
+
+Overall, the results are not great, but given that it's a fully automatic forecast (assuming only weekly periodicities) the `auto.arima` tool gives us a first baseline to compare other methods to.
+
+For a more detailed exploration of ARIMA models take a look at [this Kernel](https://www.kaggle.com/timolee/feeling-hungry-a-beginner-s-guide-to-arima-models) by [TimLee](https://www.kaggle.com/timolee).
+
+
+
+
